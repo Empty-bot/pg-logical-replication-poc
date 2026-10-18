@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: source-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/source_db}
+    username: ${DB_USER:source_app}
+    password: ${DB_PASSWORD:source_app}
+  jpa:
+    # Flyway possède le schéma ; Hibernate vérifie seulement que les entités
+    # lui correspondent.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: false
+  flyway:
+    # S'exécute avant l'EntityManagerFactory JPA et avant le démarrage du
+    # serveur web : dès que l'API répond, la publication et le slot existent.
+    enabled: true
+    locations: classpath:db/migration

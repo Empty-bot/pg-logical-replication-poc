@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: destination-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/destination_db}
+    username: ${DB_USER:destination_app}
+    password: ${DB_PASSWORD:destination_app}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        show_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # -------------------------------------------------------------------------
+    # Valeurs substituées dans V2__subscribe_to_customers.sql (publisher_host,
+    # etc.). Cela garde les coordonnées et identifiants du publieur hors du
+    # SQL versionné. Elles proviennent de variables d'environnement
+    # (docker-compose.yml).
+    # -------------------------------------------------------------------------
+    placeholders:
+      publisher_host: ${PUBLISHER_HOST:postgres}
+      publisher_port: ${PUBLISHER_PORT:5432}
+      publisher_db: ${PUBLISHER_DB:source_db}
+      publisher_user: ${PUBLISHER_USER:replicator}
+      publisher_password: ${PUBLISHER_PASSWORD:replicator}

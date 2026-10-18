@@ -1,0 +1,105 @@
+# =============================================================================
+# PoC : réplication logique native de PostgreSQL 17 entre deux bases de
+# données hébergées dans la MÊME instance Postgres, chacune possédée par sa
+# propre API Spring Boot.
+#
+#   source-api  ──(JPA/Flyway)──▶  source_db       ── PUBLICATION customers_pub
+#                                      │                (lignes + colonnes filtrées)
+#                                      │  réplication logique (pgoutput)
+#                                      ▼
+#   destination-api ─(JPA/Flyway)─▶ destination_db ── SUBSCRIPTION customers_sub
+# =============================================================================
+services:
+
+  postgres:
+    image: postgres:17
+    container_name: pg-logrep-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    # -------------------------------------------------------------------------
+    # PRÉREQUIS DE RÉPLICATION n°1 : wal_level doit valoir 'logical'.
+    # La valeur par défaut ('replica') n'écrit dans le WAL que ce qu'il faut
+    # pour la réplication physique. 'logical' ajoute les informations
+    # nécessaires pour redécoder le WAL en changements au niveau ligne
+    # (INSERT/UPDATE/DELETE), c'est-à-dire ce qu'une publication diffuse.
+    # Ce paramètre exige un redémarrage du serveur, d'où son passage au
+    # démarrage.
+    #
+    # max_replication_slots / max_wal_senders / max_logical_replication_workers
+    # valent déjà 10 / 10 / 4 par défaut, ce qui suffit largement pour ce PoC ;
+    # ils sont écrits ici uniquement pour rendre ces réglages visibles.
+    # -------------------------------------------------------------------------
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_logical_replication_workers=4
+    ports:
+      - "5432:5432"
+    volumes:
+      # Exécuté une seule fois, au premier démarrage avec un répertoire de
+      # données vide.
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  source-api:
+    build: ./source-api
+    container_name: pg-logrep-source-api
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/source_db
+      DB_USER: source_app
+      DB_PASSWORD: source_app
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Spring Boot exécute Flyway AVANT d'ouvrir le port HTTP : « port ouvert »
+    # implique donc « la publication et le slot de réplication existent ».
+    # La destination attend cet état, car sa souscription a besoin des deux.
+    # (bash /dev/tcp évite d'avoir besoin de curl/wget dans l'image JRE.)
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  destination-api:
+    build: ./destination-api
+    container_name: pg-logrep-destination-api
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/destination_db
+      DB_USER: destination_app
+      DB_PASSWORD: destination_app
+      # -----------------------------------------------------------------------
+      # Informations de connexion utilisées par la SOUSCRIPTION pour joindre
+      # le publieur.
+      # IMPORTANT : cette connexion est ouverte par un processus d'arrière-plan
+      # de Postgres *à l'intérieur du conteneur postgres*, PAS par l'application
+      # Spring. L'hôte est donc résolu du point de vue du conteneur postgres.
+      # On utilise volontairement le nom du service compose ('postgres') plutôt
+      # que 'localhost' : l'image officielle accepte les connexions locales
+      # (loopback) sans mot de passe, et Postgres refuse les souscriptions
+      # appartenant à un non-superutilisateur quand le serveur n'a pas demandé
+      # de mot de passe (password_required=true).
+      # -----------------------------------------------------------------------
+      PUBLISHER_HOST: postgres
+      PUBLISHER_PORT: "5432"
+      PUBLISHER_DB: source_db
+      PUBLISHER_USER: replicator
+      PUBLISHER_PASSWORD: replicator
+    ports:
+      - "8082:8080"
+    depends_on:
+      source-api:
+        condition: service_healthy

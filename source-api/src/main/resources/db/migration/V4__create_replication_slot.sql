@@ -1,0 +1,43 @@
+-- =============================================================================
+-- V4 : SLOT DE RÉPLICATION CÔTÉ PUBLIEUR (créé à la main, volontairement)
+--
+-- Ce qu'est un slot :
+--   Un slot de réplication logique est un curseur dans le WAL, conservé sur le
+--   publieur. Il retient jusqu'où l'abonné a confirmé les changements, et il
+--   empêche Postgres de supprimer le WAL que l'abonné n'a pas encore consommé.
+--   'pgoutput' est le plugin de sortie intégré utilisé par la réplication
+--   logique native (c'est lui qui applique les filtres et listes de colonnes
+--   de la publication).
+--
+-- Pourquoi ne pas laisser CREATE SUBSCRIPTION le créer (son comportement par
+-- défaut) ?
+--   Parce que publieur et abonné sont deux bases de la MÊME instance Postgres.
+--   La création d'un slot logique attend que toutes les transactions en cours
+--   au moment où elle démarre soient terminées. CREATE SUBSCRIPTION serait
+--   l'une d'elles, attendant un slot qui l'attend : blocage infini. La
+--   documentation de Postgres indique qu'une souscription vers la même
+--   instance ne fonctionne que si le slot N'est PAS créé par cette même
+--   commande.
+--   Donc : le slot est créé ici, et la souscription (V2 de la destination)
+--   utilise create_slot = false + slot_name = 'customers_slot'.
+--   (Avec deux serveurs Postgres distincts, rien de tout cela n'est
+--   nécessaire.)
+--
+-- Pourquoi « executeInTransaction=false » (voir le fichier .conf à côté de ce
+-- script) ?
+--   pg_create_logical_replication_slot() refuse de s'exécuter dans une
+--   transaction qui a déjà écrit quelque chose (« cannot create logical
+--   replication slot in transaction that has performed writes »). Sinon,
+--   Flyway l'envelopperait dans la même transaction que sa propre
+--   comptabilité ; on l'exécute donc à part.
+--
+-- !! Avertissement d'exploitation !!
+--   Un slot inutilisé conserve le WAL indéfiniment. Si la destination est
+--   supprimée, supprimez la souscription (ce qui supprime le slot) ou exécutez
+--   SELECT pg_drop_replication_slot('customers_slot'); sur source_db,
+--   sinon le disque du publieur finit par se remplir.
+--   (PG17 propose max_slot_wal_keep_size comme garde-fou.)
+--
+-- Exige l'attribut REPLICATION sur source_app (voir postgres/init.sql).
+-- =============================================================================
+SELECT pg_create_logical_replication_slot('customers_slot', 'pgoutput');

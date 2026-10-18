@@ -1,0 +1,33 @@
+-- =============================================================================
+-- V5 : PUBLIER AUSSI LES DELETE
+--
+-- V3 a créé customers_pub avec publish = 'insert, update'. Cette migration
+-- l'élargit pour qu'un DELETE sur la source supprime aussi la ligne sur la
+-- destination. (Le SQL de V3 n'est pas modifié : une migration appliquée fait
+-- partie de l'historique, on ajoute une nouvelle migration plutôt que de la
+-- réécrire.)
+--
+-- Pourquoi rien d'autre n'a besoin de changer :
+--   - Retrouver la ligne : pour un DELETE, le WAL n'enregistre que les
+--     colonnes de REPLICA IDENTITY de l'ancienne ligne, ici (id, region) (voir
+--     V3, étape 1). L'abonné retrouve la ligne grâce à sa propre clé primaire
+--     (id), qui fait partie de cette identité : il peut donc appliquer le
+--     DELETE.
+--   - Filtre de lignes : avec les DELETE publiés, la clause WHERE ne peut
+--     utiliser que des colonnes de la replica identity (règle A en V3). region
+--     en fait déjà partie, donc le filtre est évalué sur la ligne supprimée :
+--     supprimer un client EU est répliqué, supprimer un client US/APAC
+--     n'envoie rien.
+--   - Liste de colonnes : doit contenir la replica identity (règle B en V3).
+--     C'est le cas.
+--
+-- Effet sur une souscription en cours : rien à configurer. Le cache des
+-- informations de publication du walsender est invalidé par ALTER
+-- PUBLICATION, donc les DELETE validés après ce point sont diffusés. Les lignes
+-- supprimées AVANT ce point (quand les DELETE n'étaient pas publiés) restent
+-- sur la destination.
+--
+-- TRUNCATE n'est toujours pas publié : ajoutez 'truncate' à la liste pour
+-- qu'un TRUNCATE sur la source vide aussi la table de destination.
+-- =============================================================================
+ALTER PUBLICATION customers_pub SET (publish = 'insert, update, delete');
